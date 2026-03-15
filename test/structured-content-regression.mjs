@@ -1,0 +1,97 @@
+#!/usr/bin/env node
+
+/**
+ * Regression tests for BioThings MCP server structuredContent responses.
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SERVER_ROOT = path.resolve(__dirname, '..');
+
+const RED = '\x1b[31m';
+const GREEN = '\x1b[32m';
+const BLUE = '\x1b[34m';
+const RESET = '\x1b[0m';
+
+let totalTests = 0;
+let passedTests = 0;
+let failedTests = 0;
+
+function assertContains(filePath, haystack, needle, testName) {
+  totalTests++;
+  if (haystack.includes(needle)) {
+    console.log(`${GREEN}✓${RESET} ${testName}`);
+    passedTests++;
+  } else {
+    console.log(`${RED}✗${RESET} ${testName}`);
+    console.log(`  Missing: ${needle}`);
+    console.log(`  File: ${filePath}`);
+    failedTests++;
+  }
+}
+
+function readFile(relPath) {
+  const absPath = path.resolve(SERVER_ROOT, relPath);
+  return fs.readFileSync(absPath, 'utf8');
+}
+
+console.log(`${BLUE}🧪 BioThings Structured Content Regression Tests${RESET}`);
+
+const toolExpectations = [
+  {
+    path: 'src/tools/gene-resolve.ts',
+    required: ['structuredContent', 'content'],
+  },
+  {
+    path: 'src/tools/variant-resolve.ts',
+    required: ['structuredContent', 'content'],
+  },
+  {
+    path: 'src/tools/compound-resolve.ts',
+    required: ['structuredContent', 'content'],
+  },
+];
+
+for (const { path: filePath, required } of toolExpectations) {
+  const content = readFile(filePath);
+  for (const token of required) {
+    assertContains(filePath, content, token, `${filePath} includes ${token}`);
+  }
+}
+
+// Verify index.ts exports Durable Object
+const indexContent = readFile('src/index.ts');
+assertContains('src/index.ts', indexContent, 'BioThingsDataDO', 'index.ts exports BioThingsDataDO');
+assertContains('src/index.ts', indexContent, 'McpAgent', 'index.ts uses McpAgent');
+
+// Verify staging tools use shared handlers
+const queryDataContent = readFile('src/tools/query-data.ts');
+assertContains('src/tools/query-data.ts', queryDataContent, 'createQueryDataHandler', 'query-data.ts uses shared handler');
+
+const getSchemaContent = readFile('src/tools/get-schema.ts');
+assertContains('src/tools/get-schema.ts', getSchemaContent, 'createGetSchemaHandler', 'get-schema.ts uses shared handler');
+
+// Verify code mode registration
+const codeModeContent = readFile('src/tools/code-mode.ts');
+assertContains('src/tools/code-mode.ts', codeModeContent, 'createSearchTool', 'code-mode.ts uses createSearchTool');
+assertContains('src/tools/code-mode.ts', codeModeContent, 'createExecuteTool', 'code-mode.ts uses createExecuteTool');
+
+// Verify batch module exists and has chunking
+const batchContent = readFile('src/lib/batch.ts');
+assertContains('src/lib/batch.ts', batchContent, 'MAX_BATCH_SIZE', 'batch.ts has MAX_BATCH_SIZE constant');
+assertContains('src/lib/batch.ts', batchContent, 'chunk', 'batch.ts has chunk function');
+
+console.log(`\n${BLUE}📊 Test Results Summary${RESET}`);
+console.log(`Total tests: ${totalTests}`);
+console.log(`${GREEN}Passed: ${passedTests}${RESET}`);
+console.log(`${RED}Failed: ${failedTests}${RESET}`);
+
+if (failedTests > 0) {
+  console.log(`\n${RED}❌ Regression tests failed.${RESET}`);
+  process.exit(1);
+}
+
+console.log(`\n${GREEN}✅ BioThings structured content regression tests passed.${RESET}`);
