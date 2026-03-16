@@ -112,13 +112,15 @@ export function registerVariantResolve(server: McpServer, env?: VariantEnv) {
 		description:
 			"Batch resolve variant identifiers (HGVS IDs, dbSNP rsIDs, ClinVar RCV accessions) to cross-references " +
 			"via MyVariant.info. Returns HGVS _id, dbSNP rsid, ClinVar variant_id, and COSMIC ID. " +
-			"Accepts up to 1000 IDs per call (auto-chunked if more).",
+			"Accepts up to 1000 IDs per call (auto-chunked if more). " +
+			"IMPORTANT: HGVS genomic coordinates must use GRCh37/hg19 (e.g. chr17:g.41209082dup, NOT GRCh38). " +
+			"dbSNP rsIDs and ClinVar RCV accessions work regardless of assembly.",
 		inputSchema: {
 			ids: z
 				.array(z.string().min(1))
 				.min(1)
 				.max(5000)
-				.describe("Variant identifiers to resolve (e.g. rs58991260, chr7:g.140453136A>T, RCV000033006)"),
+				.describe("Variant identifiers to resolve. rsIDs (rs58991260), ClinVar RCVs (RCV000033006), or HGVS genomic coords in GRCh37/hg19 (chr7:g.140453136A>T)"),
 		},
 	};
 

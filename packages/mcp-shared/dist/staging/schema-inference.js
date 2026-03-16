@@ -64,6 +64,19 @@ export function detectArrays(data) {
     }
     if (found.length > 0)
         return found;
+    // HAL+JSON: { _embedded: { studies: [...], associations: [...] } }
+    // Common in EBI/Spring HATEOAS APIs. Traverse into _embedded to find arrays.
+    const embedded = obj._embedded;
+    if (embedded && typeof embedded === "object" && !Array.isArray(embedded)) {
+        const embeddedObj = embedded;
+        for (const [key, value] of Object.entries(embeddedObj)) {
+            if (Array.isArray(value) && value.length > 0) {
+                found.push({ key, rows: value });
+            }
+        }
+        if (found.length > 0)
+            return found;
+    }
     // Handle single-key wrapper objects (common in GraphQL responses)
     // e.g., { entry: { struct: {...}, exptl: [...] } } → unwrap and recurse
     // Also handles nested wrappers like { genes: { nodes: [...] } }
