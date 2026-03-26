@@ -73,7 +73,7 @@ async function runVariantResolve(ids: string[], env?: VariantEnv) {
 		try {
 			const staged = await stageToDoAndRespond(
 				results,
-				env.BIOTHINGS_DATA_DO as any,
+				env.BIOTHINGS_DATA_DO as DurableObjectNamespace,
 				"biothings_variant",
 			);
 			return {
@@ -106,7 +106,7 @@ async function runVariantResolve(ids: string[], env?: VariantEnv) {
 	};
 }
 
-export function registerVariantResolve(server: McpServer, env?: VariantEnv) {
+export function registerVariantResolve(server: McpServer, env?: VariantEnv): void {
 	const schema = {
 		title: "Resolve Variant Identifiers",
 		description:

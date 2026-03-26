@@ -92,7 +92,7 @@ async function runGeneResolve(ids: string[], env?: GeneEnv, species?: string | n
 		try {
 			const staged = await stageToDoAndRespond(
 				results,
-				env.BIOTHINGS_DATA_DO as any,
+				env.BIOTHINGS_DATA_DO as DurableObjectNamespace,
 				"biothings_gene",
 			);
 			return {
@@ -125,7 +125,7 @@ async function runGeneResolve(ids: string[], env?: GeneEnv, species?: string | n
 	};
 }
 
-export function registerGeneResolve(server: McpServer, env?: GeneEnv) {
+export function registerGeneResolve(server: McpServer, env?: GeneEnv): void {
 	const schema = {
 		title: "Resolve Gene Identifiers",
 		description:

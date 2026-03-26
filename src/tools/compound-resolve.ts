@@ -72,7 +72,7 @@ async function runCompoundResolve(ids: string[], env?: CompoundEnv) {
 		try {
 			const staged = await stageToDoAndRespond(
 				results,
-				env.BIOTHINGS_DATA_DO as any,
+				env.BIOTHINGS_DATA_DO as DurableObjectNamespace,
 				"biothings_compound",
 			);
 			return {
@@ -105,7 +105,7 @@ async function runCompoundResolve(ids: string[], env?: CompoundEnv) {
 	};
 }
 
-export function registerCompoundResolve(server: McpServer, env?: CompoundEnv) {
+export function registerCompoundResolve(server: McpServer, env?: CompoundEnv): void {
 	const schema = {
 		title: "Resolve Compound Identifiers",
 		description:

@@ -47,10 +47,21 @@ export function createBioThingsApiFetch(): ApiFetchFn {
 
 		// Handle POST requests (batch queries)
 		if (request.method === "POST" && request.body) {
-			const body =
-				typeof request.body === "string"
-					? JSON.parse(request.body)
-					: (request.body as Record<string, string>);
+			let body: Record<string, string>;
+			if (typeof request.body === "string") {
+				try {
+					body = JSON.parse(request.body) as Record<string, string>;
+				} catch {
+					const error = new Error(
+						`Invalid JSON in request body`,
+					) as Error & { status: number; data: unknown };
+					error.status = 400;
+					error.data = null;
+					throw error;
+				}
+			} else {
+				body = request.body as Record<string, string>;
+			}
 			const response = await biothingsPost(route.base, realPath, body);
 
 			if (!response.ok) {

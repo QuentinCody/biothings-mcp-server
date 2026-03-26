@@ -16,7 +16,7 @@ interface CodeModeEnv {
 	CODE_MODE_LOADER: WorkerLoader;
 }
 
-export function registerCodeMode(server: McpServer, env: CodeModeEnv) {
+export function registerCodeMode(server: McpServer, env: CodeModeEnv): void {
 	const apiFetch = createBioThingsApiFetch();
 
 	const searchTool = createSearchTool({
