@@ -53,7 +53,7 @@ export function createBioThingsApiFetch(): ApiFetchFn {
 					body = JSON.parse(request.body) as Record<string, string>;
 				} catch {
 					const error = new Error(
-						`Invalid JSON in request body`,
+						"Invalid JSON in request body",
 					) as Error & { status: number; data: unknown };
 					error.status = 400;
 					error.data = null;

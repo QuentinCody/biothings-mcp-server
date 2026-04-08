@@ -17,11 +17,11 @@ export interface BioThingsFetchOptions extends Omit<RestFetchOptions, "retryOn">
 const UA = "biothings-mcp-server/1.0 (bio-mcp; https://github.com/QuentinCody/biothings-mcp-server)";
 
 function makeFetcher(defaultBase: string) {
-	return async function (
+	return async (
 		path: string,
 		params?: Record<string, unknown>,
 		opts?: BioThingsFetchOptions,
-	): Promise<Response> {
+	): Promise<Response> => {
 		const baseUrl = opts?.baseUrl ?? defaultBase;
 		const headers: Record<string, string> = {
 			Accept: "application/json",
