@@ -85,9 +85,7 @@ async function runVariantResolve(ids: string[], env?: VariantEnv) {
 					_meta: { entity_type: "variant", total: results.length, found: results.filter((r) => r.found).length },
 				},
 			};
-		} catch {
-			// fall through to inline
-		}
+		} catch { /* best-effort: fall through to inline */ }
 	}
 
 	const isLarge = resultJson.length > 100_000;

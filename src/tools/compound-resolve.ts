@@ -84,9 +84,7 @@ async function runCompoundResolve(ids: string[], env?: CompoundEnv) {
 					_meta: { entity_type: "compound", total: results.length, found: results.filter((r) => r.found).length },
 				},
 			};
-		} catch {
-			// fall through to inline
-		}
+		} catch { /* best-effort: fall through to inline */ }
 	}
 
 	const isLarge = resultJson.length > 100_000;
