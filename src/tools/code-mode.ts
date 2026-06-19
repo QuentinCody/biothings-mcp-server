@@ -27,6 +27,8 @@ export function registerCodeMode(server: McpServer, env: CodeModeEnv): void {
 
 	const executeTool = createExecuteTool({
 		prefix: "biothings",
+		// Verifiable provenance: biothings_execute results carry a _meta.citation.
+		source: { id: "biothings", name: "BioThings", url: "https://biothings.io" },
 		catalog: biothingsCatalog,
 		apiFetch,
 		doNamespace: env.BIOTHINGS_DATA_DO,
