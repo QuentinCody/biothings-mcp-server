@@ -65,7 +65,7 @@ for (const { path: filePath, required } of toolExpectations) {
 // Verify index.ts exports Durable Object
 const indexContent = readFile('src/index.ts');
 assertContains('src/index.ts', indexContent, 'BioThingsDataDO', 'index.ts exports BioThingsDataDO');
-assertContains('src/index.ts', indexContent, 'McpAgent', 'index.ts uses McpAgent');
+assertContains('src/index.ts', indexContent, 'StatelessMcpWorker', 'index.ts uses StatelessMcpWorker');
 
 // Verify staging tools use shared handlers
 const queryDataContent = readFile('src/tools/query-data.ts');

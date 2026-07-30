@@ -5,7 +5,7 @@
  * Returns cross-references: HGVS _id, dbSNP rsid, ClinVar variant_id, COSMIC ID.
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@bio-mcp/shared/mcp";
 import { z } from "zod";
 import { batchResolve } from "../lib/batch";
 import { shouldStage, stageToDoAndRespond } from "@bio-mcp/shared/staging/utils";
