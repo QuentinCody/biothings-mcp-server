@@ -5,10 +5,12 @@
  * Returns cross-references: ChEMBL, DrugBank, PubChem CID, UNII, ChEBI.
  */
 
+import { getRequestLicenseProfile, type MaybeExtra } from "@bio-mcp/shared";
 import type { McpServer } from "@bio-mcp/shared/mcp";
 import { z } from "zod";
-import { batchResolve } from "../lib/batch";
-import { shouldStage, stageToDoAndRespond } from "@bio-mcp/shared/staging/utils";
+import { batchResolveWithProfile } from "../lib/batch";
+import { biothingsResolution } from "../lib/tool-result";
+
 import type { CompoundResolution, BioThingsHit } from "../lib/types";
 
 interface CompoundEnv {
@@ -17,7 +19,7 @@ interface CompoundEnv {
 
 function parseHit(hit: BioThingsHit): CompoundResolution {
 	if (hit.notfound) {
-		return { query: hit.query, found: false };
+		return { query: hit.query, found: false, native: hit };
 	}
 
 	const chembl = hit.chembl as Record<string, unknown> | undefined;
@@ -29,6 +31,7 @@ function parseHit(hit: BioThingsHit): CompoundResolution {
 	return {
 		query: hit.query,
 		found: true,
+		native: hit,
 		chembl_id: chembl?.molecule_chembl_id as string | undefined,
 		drugbank_id: drugbank?.id as string | undefined,
 		pubchem_cid: pubchem?.cid as number | undefined,
@@ -41,7 +44,7 @@ function formatPreview(results: CompoundResolution[]): string {
 	const found = results.filter((r) => r.found);
 	const notFound = results.filter((r) => !r.found);
 	const lines: string[] = [
-		`Compound Resolution: ${found.length} found, ${notFound.length} not found out of ${results.length} queries`,
+		`Compound Resolution: ${found.length} matching rows, ${notFound.length} notfound rows (${results.length} response rows; multiple matches may share a query)`,
 		"",
 	];
 
@@ -62,42 +65,23 @@ function formatPreview(results: CompoundResolution[]): string {
 	return lines.join("\n");
 }
 
-async function runCompoundResolve(ids: string[], env?: CompoundEnv) {
-	const hits = await batchResolve(ids, "compound");
+async function runCompoundResolve(ids: string[], licenseProfile: "commercial" | undefined) {
+	const { hits, licenseFilter } = await batchResolveWithProfile(ids, "compound", { licenseProfile });
 	const results = hits.map(parseHit);
 	const preview = formatPreview(results);
 
-	const resultJson = JSON.stringify(results);
-	if (shouldStage(resultJson.length) && env?.BIOTHINGS_DATA_DO) {
-		try {
-			const staged = await stageToDoAndRespond(
-				results,
-				env.BIOTHINGS_DATA_DO as DurableObjectNamespace,
-				"biothings_compound",
-			);
-			return {
-				content: [{ type: "text" as const, text: `${preview}\n\nData staged (${results.length} rows). Use biothings_query_data with data_access_id '${staged.dataAccessId}'.` }],
-				structuredContent: {
-					success: true,
-					data: undefined,
-					_staging: staged._staging,
-					_meta: { entity_type: "compound", total: results.length, found: results.filter((r) => r.found).length },
-				},
-			};
-		} catch { /* best-effort: fall through to inline */ }
-	}
 
-	const isLarge = resultJson.length > 100_000;
 	return {
 		content: [{ type: "text" as const, text: preview }],
 		structuredContent: {
 			success: true,
-			data: isLarge ? undefined : results,
+			data: results,
+			...(licenseFilter ? { _license_filter: licenseFilter } : {}),
 			_meta: {
 				entity_type: "compound",
+				input_count: ids.length,
 				total: results.length,
 				found: results.filter((r) => r.found).length,
-				...(isLarge ? { truncated: true, hint: "Use biothings_query_data to explore staged data." } : {}),
 			},
 		},
 	};
@@ -109,7 +93,7 @@ export function registerCompoundResolve(server: McpServer, env?: CompoundEnv): v
 		description:
 			"Batch resolve compound identifiers (InChIKeys, DrugBank IDs, ChEMBL IDs, PubChem CIDs) to cross-references " +
 			"via MyChem.info. Returns ChEMBL ID, DrugBank ID, PubChem CID, UNII, and ChEBI ID. " +
-			"Accepts up to 1000 IDs per call (auto-chunked if more).",
+			"Accepts up to 5000 IDs per call in local 1000-input chunks. Complete native hits retain all mappings, scores and source licenses; convenience scalar fields may show only the first value and do not establish canonical or equivalent identities.",
 		inputSchema: {
 			ids: z
 				.array(z.string().min(1))
@@ -121,7 +105,8 @@ export function registerCompoundResolve(server: McpServer, env?: CompoundEnv): v
 
 	const handler = async (args: { ids: string[] }, extra: unknown) => {
 		const runtimeEnv = env || (extra as { env?: CompoundEnv })?.env || {};
-		return runCompoundResolve(args.ids, runtimeEnv as CompoundEnv);
+		const licenseProfile = getRequestLicenseProfile(extra as MaybeExtra | undefined);
+		return biothingsResolution(() => runCompoundResolve(args.ids, licenseProfile), runtimeEnv, "biothings_compound_resolve", args, extra);
 	};
 
 	server.registerTool("mcp_biothings_compound_resolve", schema, handler);

@@ -1,5 +1,5 @@
 /**
- * BioThings API catalog — three APIs: MyGene.info, MyVariant.info, MyChem.info
+ * BioThings API catalog — gene, variant, chemical, disease and taxonomy annotations
  *
  * Primary use case: entity resolution and batch ID mapping.
  * All endpoints are public (no auth required).
@@ -11,24 +11,28 @@
  */
 
 import type { ApiCatalog } from "@bio-mcp/shared/codemode/catalog";
+import { entityEndpoints, entityNotes } from "./entities";
+import { biothingsWorkflows } from "./workflows";
 
 export const biothingsCatalog: ApiCatalog = {
-	name: "BioThings (MyGene + MyVariant + MyChem)",
+	name: "BioThings (MyGene + MyVariant + MyChem + MyDisease + MyTaxon)",
 	baseUrl: "https://mygene.info",
 	version: "3.0",
 	auth: "none",
-	endpointCount: 12,
-	notes:
-		"- Three APIs behind virtual path prefixes: /gene/ → mygene.info, /variant/ → myvariant.info, /chem/ → mychem.info\n" +
+	workflows: biothingsWorkflows,
+	endpointCount: 12 + entityEndpoints.length,
+	notes: entityNotes +
+		"- Original API prefixes: /gene/ → mygene.info, /variant/ → myvariant.info, /chem/ → mychem.info\n" +
 		"- The adapter routes to the correct base URL based on prefix and strips it\n" +
 		"- POST /query endpoints accept form-encoded body: q (comma-separated IDs), scopes, fields\n" +
 		"- For POST batch queries use api.post('/gene/query', {q: 'BRAF,TP53', scopes: 'symbol', fields: 'entrezgene,ensembl.gene'})\n" +
 		"- Always pass minimal `fields` — requesting fields=all on batches returns megabytes of unnecessary data\n" +
-		"- Batch endpoints cap at 1000 IDs per request; auto-chunked by hand-built tools\n" +
-		"- GET /query endpoints use q param for single query: api.get('/gene/query', {q: 'BRAF', scopes: 'symbol', fields: 'entrezgene'})\n" +
+		"- Hand-built resolvers accept up to 5000 inputs, chunking at a local 1000-input limit; provider limits differ. Code Mode does not auto-chunk.\n" +
+		"- GET /query uses fielded query syntax: api.get('/gene/query', {q: 'symbol:BRAF', fields: 'entrezgene'}). POST scopes are not a substitute for GET fielded syntax. Quote colon-bearing document identifiers, e.g. _id:\"MONDO:0007947\".\n" +
 		"- Direct document lookup: api.get('/gene/gene/{id}') with Entrez or Ensembl ID\n" +
-		"- Response format: batch POST returns array of hits; single GET returns single object",
+		"- Response format: batch POST returns all returned hit/notfound rows, possibly multiple per input; GET /query returns a paged hits envelope; document GET returns an object. Metadata is an observed build, not a pinned snapshot. Responses are bounded at 4 MiB / ten body-read seconds and stage above 30 KiB.",
 	endpoints: [
+		...entityEndpoints,
 		// ===================================================================
 		// MyGene.info — Gene entity resolution and annotation
 		// Base: https://mygene.info/v3
@@ -40,7 +44,6 @@ export const biothingsCatalog: ApiCatalog = {
 			category: "gene",
 			queryParams: [
 				{ name: "q", type: "string", required: true, description: "Query term (gene symbol, alias, or ID)" },
-				{ name: "scopes", type: "string", required: false, description: "Comma-separated scopes: symbol,alias,entrezgene,ensembl.gene (default: _id)" },
 				{ name: "fields", type: "string", required: false, description: "Comma-separated fields to return (e.g. entrezgene,ensembl.gene,symbol)" },
 				{ name: "size", type: "number", required: false, description: "Number of results (default: 10)", default: 10 },
 				{ name: "from", type: "number", required: false, description: "Offset for pagination", default: 0 },
@@ -85,7 +88,6 @@ export const biothingsCatalog: ApiCatalog = {
 			category: "variant",
 			queryParams: [
 				{ name: "q", type: "string", required: true, description: "Query term (HGVS ID, rsID, or ClinVar RCV)" },
-				{ name: "scopes", type: "string", required: false, description: "Comma-separated scopes: _id,dbsnp.rsid,clinvar.rcv.accession" },
 				{ name: "fields", type: "string", required: false, description: "Comma-separated fields to return" },
 				{ name: "size", type: "number", required: false, description: "Number of results (default: 10)", default: 10 },
 				{ name: "from", type: "number", required: false, description: "Offset for pagination", default: 0 },
@@ -129,7 +131,6 @@ export const biothingsCatalog: ApiCatalog = {
 			category: "compound",
 			queryParams: [
 				{ name: "q", type: "string", required: true, description: "Query term (InChIKey, DrugBank ID, ChEMBL ID, PubChem CID)" },
-				{ name: "scopes", type: "string", required: false, description: "Comma-separated scopes: _id,drugbank.id,chembl.molecule_chembl_id,pubchem.cid" },
 				{ name: "fields", type: "string", required: false, description: "Comma-separated fields to return" },
 				{ name: "size", type: "number", required: false, description: "Number of results (default: 10)", default: 10 },
 				{ name: "from", type: "number", required: false, description: "Offset for pagination", default: 0 },

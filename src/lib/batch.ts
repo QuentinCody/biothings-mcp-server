@@ -1,12 +1,14 @@
 /**
  * Batch resolution helpers for BioThings APIs.
  *
- * All BioThings batch endpoints cap at 1000 IDs per request.
+ * Use local 1000-ID chunks across services; provider limits can differ.
  * This module auto-chunks larger lists and merges results.
  */
 
 import { biothingsPost, MYGENE_BASE, MYVARIANT_BASE, MYCHEM_BASE } from "./http";
 import type { BioThingsHit } from "./types";
+import { readBioThings } from "./read";
+import { type BioThingsService, type LicenseFilter, licenseFilter, splitFields, stripRecord } from "./commercial-profile";
 
 const MAX_BATCH_SIZE = 1000;
 
@@ -21,7 +23,7 @@ const GENE_CONFIG: BatchConfig = {
 	base: MYGENE_BASE,
 	path: "/query",
 	scopes: "symbol,alias,entrezgene,ensembl.gene",
-	fields: "entrezgene,ensembl.gene,ensembl.protein,uniprot.Swiss-Prot,HGNC,symbol,alias",
+	fields: "entrezgene,ensembl.gene,ensembl.protein,uniprot.Swiss-Prot,HGNC,symbol,alias,taxid",
 };
 
 const VARIANT_CONFIG: BatchConfig = {
@@ -60,6 +62,29 @@ function chunk<T>(arr: T[], size: number): T[][] {
 export interface BatchOptions {
 	/** Species filter (e.g. "human", "mouse", "9606"). Only applies to gene queries. */
 	species?: string;
+	/** "commercial": request and return only the allowlisted source fields (commercial-profile.ts). */
+	licenseProfile?: "commercial";
+}
+
+const SERVICE: Record<EntityType, BioThingsService> = { gene: "gene", variant: "variant", compound: "chem" };
+
+/**
+ * The commercial form of a resolver request: the removed fields leave the
+ * `fields` list, and the removed scopes leave `scopes`, because the resolver
+ * (not the caller) chose them. An input that only a removed scope matches
+ * (a DrugBank ID) then returns a notfound row.
+ */
+export function commercialBatchConfig(entityType: EntityType): BatchConfig & { removedFields: string[]; removedScopes: string[] } {
+	const config = BATCH_CONFIGS[entityType];
+	const fields = splitFields(SERVICE[entityType], config.fields);
+	const scopes = splitFields(SERVICE[entityType], config.scopes);
+	return { ...config, fields: fields.kept.join(","), scopes: scopes.kept.join(","), removedFields: fields.removed, removedScopes: scopes.removed };
+}
+
+export interface ResolvedBatch {
+	hits: BioThingsHit[];
+	/** Present under the commercial profile. */
+	licenseFilter?: LicenseFilter & { removed_scopes?: string[] };
 }
 
 /**
@@ -71,7 +96,31 @@ export async function batchResolve(
 	entityType: EntityType,
 	options?: BatchOptions,
 ): Promise<BioThingsHit[]> {
-	const config = BATCH_CONFIGS[entityType];
+	return (await batchResolveWithProfile(ids, entityType, options)).hits;
+}
+
+/** `batchResolve`, with the `_license_filter` marker of the commercial profile. */
+export async function batchResolveWithProfile(
+	ids: string[],
+	entityType: EntityType,
+	options?: BatchOptions,
+): Promise<ResolvedBatch> {
+	if (options?.licenseProfile !== "commercial") return { hits: await resolveChunks(ids, entityType, BATCH_CONFIGS[entityType], options) };
+	const service = SERVICE[entityType];
+	const config = commercialBatchConfig(entityType);
+	const removed = new Set(config.removedFields.map((field) => field.split(".")[0]));
+	const hits = (await resolveChunks(ids, entityType, config, options))
+		.map((hit) => stripRecord(service, hit, removed) as BioThingsHit);
+	const scopes = config.removedScopes.length > 0 ? { removed_scopes: config.removedScopes } : {};
+	return { hits, licenseFilter: { ...licenseFilter(service, removed), ...scopes } };
+}
+
+async function resolveChunks(
+	ids: string[],
+	entityType: EntityType,
+	config: BatchConfig,
+	options?: BatchOptions,
+): Promise<BioThingsHit[]> {
 	const chunks = chunk(ids, MAX_BATCH_SIZE);
 	const allResults: BioThingsHit[] = [];
 
@@ -87,17 +136,18 @@ export async function batchResolve(
 			body.species = options.species;
 		}
 
-		const response = await biothingsPost(config.base, config.path, body);
-
-		if (!response.ok) {
-			const errorText = await response.text().catch(() => response.statusText);
-			throw new Error(`BioThings ${entityType} batch query failed: HTTP ${response.status} — ${errorText.slice(0, 200)}`);
-		}
-
-		const data = await response.json();
-
-		if (Array.isArray(data)) {
+		try {
+			const { data } = await readBioThings(await biothingsPost(config.base, config.path, body));
+			if (!Array.isArray(data) || data.some(hit => !hit || typeof hit !== "object" || typeof hit.query !== "string" || (hit.notfound !== true && typeof hit._id !== "string")))
+				throw Object.assign(new Error(`BioThings ${entityType} returned an unrecognized batch response; no partial results returned as success`), { status: 502, data });
 			allResults.push(...(data as BioThingsHit[]));
+		} catch (error) {
+			const detail = error && typeof error === "object" ? error : {};
+			throw Object.assign(new Error(error instanceof Error ? error.message : "BioThings batch failed"), {
+				status: "status" in detail ? detail.status : 502,
+				data: { entity_type: entityType, source_url: `${config.base}${config.path}`, completed_results: allResults,
+					failed_inputs: batch, native: "data" in detail ? detail.data : null, partial: true },
+			});
 		}
 	}
 

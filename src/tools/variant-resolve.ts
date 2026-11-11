@@ -5,10 +5,12 @@
  * Returns cross-references: HGVS _id, dbSNP rsid, ClinVar variant_id, COSMIC ID.
  */
 
+import { getRequestLicenseProfile, type MaybeExtra } from "@bio-mcp/shared";
 import type { McpServer } from "@bio-mcp/shared/mcp";
 import { z } from "zod";
-import { batchResolve } from "../lib/batch";
-import { shouldStage, stageToDoAndRespond } from "@bio-mcp/shared/staging/utils";
+import { batchResolveWithProfile } from "../lib/batch";
+import { biothingsResolution } from "../lib/tool-result";
+
 import type { VariantResolution, BioThingsHit } from "../lib/types";
 
 interface VariantEnv {
@@ -17,7 +19,7 @@ interface VariantEnv {
 
 function parseHit(hit: BioThingsHit): VariantResolution {
 	if (hit.notfound) {
-		return { query: hit.query, found: false };
+		return { query: hit.query, found: false, native: hit };
 	}
 
 	const dbsnp = hit.dbsnp as Record<string, unknown> | undefined;
@@ -32,6 +34,7 @@ function parseHit(hit: BioThingsHit): VariantResolution {
 	return {
 		query: hit.query,
 		found: true,
+		native: hit,
 		hgvs_id: hit._id as string | undefined,
 		rsid: dbsnp?.rsid as string | undefined,
 		clinvar_variant_id: clinvar?.variant_id as number | undefined,
@@ -43,7 +46,7 @@ function formatPreview(results: VariantResolution[]): string {
 	const found = results.filter((r) => r.found);
 	const notFound = results.filter((r) => !r.found);
 	const lines: string[] = [
-		`Variant Resolution: ${found.length} found, ${notFound.length} not found out of ${results.length} queries`,
+		`Variant Resolution: ${found.length} matching rows, ${notFound.length} notfound rows (${results.length} response rows; multiple matches may share a query)`,
 		"",
 	];
 
@@ -63,42 +66,23 @@ function formatPreview(results: VariantResolution[]): string {
 	return lines.join("\n");
 }
 
-async function runVariantResolve(ids: string[], env?: VariantEnv) {
-	const hits = await batchResolve(ids, "variant");
+async function runVariantResolve(ids: string[], licenseProfile: "commercial" | undefined) {
+	const { hits, licenseFilter } = await batchResolveWithProfile(ids, "variant", { licenseProfile });
 	const results = hits.map(parseHit);
 	const preview = formatPreview(results);
 
-	const resultJson = JSON.stringify(results);
-	if (shouldStage(resultJson.length) && env?.BIOTHINGS_DATA_DO) {
-		try {
-			const staged = await stageToDoAndRespond(
-				results,
-				env.BIOTHINGS_DATA_DO as DurableObjectNamespace,
-				"biothings_variant",
-			);
-			return {
-				content: [{ type: "text" as const, text: `${preview}\n\nData staged (${results.length} rows). Use biothings_query_data with data_access_id '${staged.dataAccessId}'.` }],
-				structuredContent: {
-					success: true,
-					data: undefined,
-					_staging: staged._staging,
-					_meta: { entity_type: "variant", total: results.length, found: results.filter((r) => r.found).length },
-				},
-			};
-		} catch { /* best-effort: fall through to inline */ }
-	}
 
-	const isLarge = resultJson.length > 100_000;
 	return {
 		content: [{ type: "text" as const, text: preview }],
 		structuredContent: {
 			success: true,
-			data: isLarge ? undefined : results,
+			data: results,
+			...(licenseFilter ? { _license_filter: licenseFilter } : {}),
 			_meta: {
 				entity_type: "variant",
+				input_count: ids.length,
 				total: results.length,
 				found: results.filter((r) => r.found).length,
-				...(isLarge ? { truncated: true, hint: "Use biothings_query_data to explore staged data." } : {}),
 			},
 		},
 	};
@@ -110,7 +94,7 @@ export function registerVariantResolve(server: McpServer, env?: VariantEnv): voi
 		description:
 			"Batch resolve variant identifiers (HGVS IDs, dbSNP rsIDs, ClinVar RCV accessions) to cross-references " +
 			"via MyVariant.info. Returns HGVS _id, dbSNP rsid, ClinVar variant_id, and COSMIC ID. " +
-			"Accepts up to 1000 IDs per call (auto-chunked if more). " +
+			"Accepts up to 5000 IDs per call in local 1000-input chunks. Complete native hits retain all mappings, scores and source licenses; convenience scalar fields may show only the first value and do not establish canonical or equivalent identities. " +
 			"IMPORTANT: HGVS genomic coordinates must use GRCh37/hg19 (e.g. chr17:g.41209082dup, NOT GRCh38). " +
 			"dbSNP rsIDs and ClinVar RCV accessions work regardless of assembly.",
 		inputSchema: {
@@ -124,7 +108,8 @@ export function registerVariantResolve(server: McpServer, env?: VariantEnv): voi
 
 	const handler = async (args: { ids: string[] }, extra: unknown) => {
 		const runtimeEnv = env || (extra as { env?: VariantEnv })?.env || {};
-		return runVariantResolve(args.ids, runtimeEnv as VariantEnv);
+		const licenseProfile = getRequestLicenseProfile(extra as MaybeExtra | undefined);
+		return biothingsResolution(() => runVariantResolve(args.ids, licenseProfile), runtimeEnv, "biothings_variant_resolve", args, extra);
 	};
 
 	server.registerTool("mcp_biothings_variant_resolve", schema, handler);

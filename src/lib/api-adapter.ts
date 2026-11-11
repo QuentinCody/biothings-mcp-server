@@ -1,115 +1,90 @@
 /**
- * BioThings API adapter — routes requests to MyGene, MyVariant, or MyChem
+ * BioThings API adapter — routes requests to five annotation services
  * based on path prefix.
  *
  * Virtual path namespaces:
  *   /gene/*     → mygene.info/v3
  *   /variant/*  → myvariant.info/v1
  *   /chem/*     → mychem.info/v1
+ *   /disease/*  → mydisease.info/v1
+ *   /taxon/*    → mytaxon.info/v1
  */
 
 import type { ApiFetchFn } from "@bio-mcp/shared/codemode/catalog";
+import { readBioThings } from "./read";
+import { biothingsCompleteness } from "./completeness";
+import { applyCommercialFilter, type BioThingsService, commercialRequestRule, isMetadataPath } from "./commercial-profile";
 import {
 	mygeneFetch,
 	myvariantFetch,
 	mychemFetch,
+	mydiseaseFetch,
+	mytaxonFetch,
 	biothingsPost,
 	MYGENE_BASE,
 	MYVARIANT_BASE,
 	MYCHEM_BASE,
+	MYDISEASE_BASE,
+	MYTAXON_BASE,
 } from "./http";
 
 const ROUTE_MAP: Array<{
 	prefix: string;
+	service: BioThingsService;
 	fetch: typeof mygeneFetch;
 	base: string;
 }> = [
-	{ prefix: "/gene/", fetch: mygeneFetch, base: MYGENE_BASE },
-	{ prefix: "/variant/", fetch: myvariantFetch, base: MYVARIANT_BASE },
-	{ prefix: "/chem/", fetch: mychemFetch, base: MYCHEM_BASE },
+	{ prefix: "/gene/", service: "gene", fetch: mygeneFetch, base: MYGENE_BASE },
+	{ prefix: "/variant/", service: "variant", fetch: myvariantFetch, base: MYVARIANT_BASE },
+	{ prefix: "/chem/", service: "chem", fetch: mychemFetch, base: MYCHEM_BASE },
+	{ prefix: "/disease/", service: "disease", fetch: mydiseaseFetch, base: MYDISEASE_BASE },
+	{ prefix: "/taxon/", service: "taxon", fetch: mytaxonFetch, base: MYTAXON_BASE },
 ];
 
+function apiError(message: string, status: number, data: unknown = null) {
+  return Object.assign(new Error(message), { status, data });
+}
+
+function batchBody(body: unknown): Record<string, string> {
+  let parsed = body;
+  if (typeof body === "string") {
+    try { parsed = JSON.parse(body); }
+    catch { throw apiError("Invalid JSON in request body", 400); }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw apiError("Batch body must be an object of form parameters", 400);
+  }
+  return Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value)]));
+}
+
 export function createBioThingsApiFetch(): ApiFetchFn {
-	return async (request) => {
-		const route = ROUTE_MAP.find((r) => request.path.startsWith(r.prefix));
-
-		if (!route) {
-			const error = new Error(
-				`Unknown BioThings path prefix: ${request.path}. Use /gene/, /variant/, or /chem/.`,
-			) as Error & { status: number; data: unknown };
-			error.status = 400;
-			error.data = null;
-			throw error;
-		}
-
-		// Strip the virtual prefix: /gene/query → /query
-		const realPath = request.path.slice(route.prefix.length - 1);
-
-		// Handle POST requests (batch queries)
-		if (request.method === "POST" && request.body) {
-			let body: Record<string, string>;
-			if (typeof request.body === "string") {
-				try {
-					body = JSON.parse(request.body) as Record<string, string>;
-				} catch {
-					const error = new Error(
-						"Invalid JSON in request body",
-					) as Error & { status: number; data: unknown };
-					error.status = 400;
-					error.data = null;
-					throw error;
-				}
-			} else {
-				body = request.body as Record<string, string>;
-			}
-			const response = await biothingsPost(route.base, realPath, body);
-
-			if (!response.ok) {
-				let errorBody: string;
-				try {
-					errorBody = await response.text();
-				} catch {
-					errorBody = response.statusText;
-				}
-				const error = new Error(`HTTP ${response.status}: ${errorBody.slice(0, 200)}`) as Error & {
-					status: number;
-					data: unknown;
-				};
-				error.status = response.status;
-				error.data = errorBody;
-				throw error;
-			}
-
-			const data = await response.json();
-			return { status: response.status, data };
-		}
-
-		// Handle GET requests
-		const response = await route.fetch(realPath, request.params);
-
-		if (!response.ok) {
-			let errorBody: string;
-			try {
-				errorBody = await response.text();
-			} catch {
-				errorBody = response.statusText;
-			}
-			const error = new Error(`HTTP ${response.status}: ${errorBody.slice(0, 200)}`) as Error & {
-				status: number;
-				data: unknown;
-			};
-			error.status = response.status;
-			error.data = errorBody;
-			throw error;
-		}
-
-		const contentType = response.headers.get("content-type") || "";
-		if (!contentType.includes("json")) {
-			const text = await response.text();
-			return { status: response.status, data: text };
-		}
-
-		const data = await response.json();
-		return { status: response.status, data };
-	};
+  return async (request) => {
+    if (request.method !== "GET" && request.method !== "POST") throw apiError("BioThings supports GET reads and POST batch queries", 405);
+    const route = ROUTE_MAP.find(r => request.path.startsWith(r.prefix));
+    if (!route) throw apiError(`Unknown BioThings path prefix: ${request.path}. Use ${ROUTE_MAP.map(r => r.prefix).join(", ")}.`, 400);
+    const path = request.path.slice(route.prefix.length - 1);
+    let params = request.params;
+    let body = request.method === "POST" ? batchBody(request.body) : undefined;
+    // A reselling caller gets only the source fields whose license permits commercial use (commercial-profile.ts).
+    const commercial = request.licenseProfile === "commercial" && !isMetadataPath(path);
+    let stripped: string[] = [];
+    if (commercial) {
+      const rule = commercialRequestRule(route.service, path, params, body);
+      if ("refusal" in rule) return rule.refusal;
+      ({ params, body, stripped } = rule);
+    }
+    const response = body
+      ? await biothingsPost(route.base, path, body, params)
+      : await route.fetch(path, params);
+    const result = await readBioThings(response);
+    if (result.data && typeof result.data === "object" && "error" in result.data && typeof result.data.error === "string")
+      throw apiError("BioThings reported an application error", 502, { http_status: result.status, native: result.data });
+    if (commercial) {
+      const filtered = applyCommercialFilter(route.service, result.data, stripped);
+      if ("refusal" in filtered) return filtered.refusal;
+      result.data = filtered.data;
+    }
+    const completeness = biothingsCompleteness(result.data, request.path);
+    return completeness ? { ...result, completeness, upstreamTotal: completeness.total_available ?? null } : result;
+  };
 }

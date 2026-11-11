@@ -5,10 +5,12 @@
  * Returns cross-references: Entrez, Ensembl gene/protein, UniProt, HGNC, symbol, aliases.
  */
 
+import { getRequestLicenseProfile, type MaybeExtra } from "@bio-mcp/shared";
 import type { McpServer } from "@bio-mcp/shared/mcp";
 import { z } from "zod";
-import { batchResolve } from "../lib/batch";
-import { shouldStage, stageToDoAndRespond } from "@bio-mcp/shared/staging/utils";
+import { batchResolveWithProfile } from "../lib/batch";
+import { biothingsResolution } from "../lib/tool-result";
+
 import type { GeneResolution, BioThingsHit } from "../lib/types";
 
 interface GeneEnv {
@@ -17,7 +19,7 @@ interface GeneEnv {
 
 function parseHit(hit: BioThingsHit): GeneResolution {
 	if (hit.notfound) {
-		return { query: hit.query, found: false };
+		return { query: hit.query, found: false, native: hit };
 	}
 
 	const ensemblRaw = hit.ensembl as Record<string, unknown> | Array<Record<string, unknown>> | undefined;
@@ -46,7 +48,8 @@ function parseHit(hit: BioThingsHit): GeneResolution {
 	return {
 		query: hit.query,
 		found: true,
-		entrezgene: hit.entrezgene as number | undefined,
+		native: hit,
+		entrezgene: hit.entrezgene as string | number | undefined,
 		ensembl_gene: ensemblGene,
 		ensembl_protein: ensemblProteins,
 		uniprot,
@@ -60,7 +63,7 @@ function formatPreview(results: GeneResolution[]): string {
 	const found = results.filter((r) => r.found);
 	const notFound = results.filter((r) => !r.found);
 	const lines: string[] = [
-		`Gene Resolution: ${found.length} found, ${notFound.length} not found out of ${results.length} queries`,
+		`Gene Resolution: ${found.length} matching rows, ${notFound.length} notfound rows (${results.length} response rows; multiple matches may share a query)`,
 		"",
 	];
 
@@ -80,44 +83,25 @@ function formatPreview(results: GeneResolution[]): string {
 	return lines.join("\n");
 }
 
-async function runGeneResolve(ids: string[], env?: GeneEnv, species?: string | null) {
+async function runGeneResolve(ids: string[], species: string | null | undefined, licenseProfile: "commercial" | undefined) {
 	// null = explicitly "all" (no filter), undefined = default to "human"
 	const speciesValue = species === null ? undefined : (species ?? "human");
-	const hits = await batchResolve(ids, "gene", { species: speciesValue });
+	const { hits, licenseFilter } = await batchResolveWithProfile(ids, "gene", { species: speciesValue, licenseProfile });
 	const results = hits.map(parseHit);
 	const preview = formatPreview(results);
 
-	const resultJson = JSON.stringify(results);
-	if (shouldStage(resultJson.length) && env?.BIOTHINGS_DATA_DO) {
-		try {
-			const staged = await stageToDoAndRespond(
-				results,
-				env.BIOTHINGS_DATA_DO as DurableObjectNamespace,
-				"biothings_gene",
-			);
-			return {
-				content: [{ type: "text" as const, text: `${preview}\n\nData staged (${results.length} rows). Use biothings_query_data with data_access_id '${staged.dataAccessId}'.` }],
-				structuredContent: {
-					success: true,
-					data: undefined,
-					_staging: staged._staging,
-					_meta: { entity_type: "gene", total: results.length, found: results.filter((r) => r.found).length },
-				},
-			};
-		} catch { /* best-effort: fall through to inline */ }
-	}
 
-	const isLarge = resultJson.length > 100_000;
 	return {
 		content: [{ type: "text" as const, text: preview }],
 		structuredContent: {
 			success: true,
-			data: isLarge ? undefined : results,
+			data: results,
+			...(licenseFilter ? { _license_filter: licenseFilter } : {}),
 			_meta: {
 				entity_type: "gene",
+				input_count: ids.length,
 				total: results.length,
 				found: results.filter((r) => r.found).length,
-				...(isLarge ? { truncated: true, hint: "Use biothings_query_data to explore staged data." } : {}),
 			},
 		},
 	};
@@ -129,7 +113,7 @@ export function registerGeneResolve(server: McpServer, env?: GeneEnv): void {
 		description:
 			"Batch resolve gene identifiers (symbols, aliases, Entrez IDs, Ensembl gene IDs) to cross-references " +
 			"via MyGene.info. Returns Entrez, Ensembl gene/protein, UniProt Swiss-Prot, HGNC, symbol, and aliases. " +
-			"Defaults to human genes only. Accepts up to 1000 IDs per call (auto-chunked if more).",
+			"Defaults to human genes only. Accepts up to 5000 IDs per call in local 1000-input chunks. Complete native hits retain all mappings, scores and source licenses; convenience scalar fields may show only the first value and do not establish canonical or equivalent identities.",
 		inputSchema: {
 			ids: z
 				.array(z.string().min(1))
@@ -147,7 +131,8 @@ export function registerGeneResolve(server: McpServer, env?: GeneEnv): void {
 		const runtimeEnv = env || (extra as { env?: GeneEnv })?.env || {};
 		// "all" → null (no species filter), undefined → default to human
 		const species = args.species === "all" ? null : args.species;
-		return runGeneResolve(args.ids, runtimeEnv as GeneEnv, species);
+		const licenseProfile = getRequestLicenseProfile(extra as MaybeExtra | undefined);
+		return biothingsResolution(() => runGeneResolve(args.ids, species, licenseProfile), runtimeEnv, "biothings_gene_resolve", args, extra);
 	};
 
 	server.registerTool("mcp_biothings_gene_resolve", schema, handler);

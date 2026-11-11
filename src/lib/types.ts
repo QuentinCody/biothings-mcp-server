@@ -15,7 +15,8 @@ export interface BioThingsHit {
 export interface GeneResolution {
 	query: string;
 	found: boolean;
-	entrezgene?: number;
+	native: BioThingsHit;
+	entrezgene?: string | number;
 	ensembl_gene?: string;
 	ensembl_protein?: string[];
 	uniprot?: string;
@@ -28,6 +29,7 @@ export interface GeneResolution {
 export interface VariantResolution {
 	query: string;
 	found: boolean;
+	native: BioThingsHit;
 	hgvs_id?: string;
 	rsid?: string;
 	clinvar_variant_id?: number;
@@ -38,6 +40,7 @@ export interface VariantResolution {
 export interface CompoundResolution {
 	query: string;
 	found: boolean;
+	native: BioThingsHit;
 	chembl_id?: string;
 	drugbank_id?: string;
 	pubchem_cid?: number;
