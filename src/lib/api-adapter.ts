@@ -57,16 +57,36 @@ function batchBody(body: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value)]));
 }
 
+type Params = Parameters<ApiFetchFn>[0]["params"];
+
+/**
+ * The path without its query string and fragment, and the params with each
+ * pair of that query string added. The fetch sends a query string inside the
+ * path to the upstream, so the commercial rule must read it as parameters.
+ */
+export function withPathQuery(path: string, params: Params): { path: string; params: Params } {
+  const mark = path.search(/[?#]/);
+  if (mark < 0) return { path, params };
+  const merged: Record<string, unknown> = { ...params };
+  const query = path[mark] === "?" ? path.slice(mark + 1).split("#")[0] : "";
+  for (const [key, value] of new URLSearchParams(query)) {
+    const prior = merged[key];
+    merged[key] = prior === undefined ? value : [...(Array.isArray(prior) ? prior : [prior]), value];
+  }
+  return { path: path.slice(0, mark), params: merged };
+}
+
 export function createBioThingsApiFetch(): ApiFetchFn {
   return async (request) => {
     if (request.method !== "GET" && request.method !== "POST") throw apiError("BioThings supports GET reads and POST batch queries", 405);
     const route = ROUTE_MAP.find(r => request.path.startsWith(r.prefix));
     if (!route) throw apiError(`Unknown BioThings path prefix: ${request.path}. Use ${ROUTE_MAP.map(r => r.prefix).join(", ")}.`, 400);
-    const path = request.path.slice(route.prefix.length - 1);
-    let params = request.params;
+    const reselling = request.licenseProfile === "commercial";
+    const upstreamPath = request.path.slice(route.prefix.length - 1);
+    let { path, params } = reselling ? withPathQuery(upstreamPath, request.params) : { path: upstreamPath, params: request.params };
     let body = request.method === "POST" ? batchBody(request.body) : undefined;
     // A reselling caller gets only the source fields whose license permits commercial use (commercial-profile.ts).
-    const commercial = request.licenseProfile === "commercial" && !isMetadataPath(path);
+    const commercial = reselling && !isMetadataPath(path);
     let stripped: string[] = [];
     if (commercial) {
       const rule = commercialRequestRule(route.service, path, params, body);

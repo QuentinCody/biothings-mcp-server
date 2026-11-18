@@ -157,6 +157,31 @@ describe("BioThings adapter under the commercial license profile", () => {
 		expect(calls).toEqual([]);
 	});
 
+	// The fetch keeps a query string inside the path: MyVariant answered
+	// GET /v1/query?q=cadd.phred:>40 with 964,301 hits on 2026-11-14.
+	it("reads the query string inside the path as parameters, and refuses a removed field there too", async () => {
+		const calls = stubUpstream(cdk2Page);
+		const refused: Array<[string, Record<string, unknown> | undefined, string]> = [
+			["/variant/query?q=cadd.phred:%3E20", undefined, "cadd"],
+			["/variant/query?size=1&q=_exists_:dbnsfp", undefined, "dbnsfp"],
+			["/variant/query?q=chr7:140453136&sort=-cadd.phred", undefined, "cadd"],
+			["/variant/query?q=cosmic.cosmic_id:COSM476", { q: "dbsnp.rsid:rs113488022" }, "cosmic"],
+			["/chem/query?facets=drugbank.groups", { q: "aspirin" }, "drugbank"],
+			["/variant/variant/chr7:g.140453136A>T?fields=cadd.phred", undefined, "cadd"],
+		];
+		for (const [path, params, field] of refused) {
+			const result = await api({ ...commercial, method: "GET", path, params });
+			expect(result.status, path).toBe(451);
+			expect(result.data).toMatchObject({ error: "NOT_LICENSED_FOR_COMMERCIAL_USE", message: expect.stringContaining(field) });
+		}
+		expect(calls).toEqual([]);
+		const served = await api({ ...commercial, method: "GET", path: "/gene/query?q=symbol:CDK2#x", params: { size: 1 } });
+		expect(served.status).toBe(200);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].url.pathname).toBe("/v3/query");
+		expect([calls[0].url.searchParams.get("q"), calls[0].url.searchParams.get("size")]).toEqual(["symbol:CDK2", "1"]);
+	});
+
 	it("sends a query that searches only kept fields, identifiers or a genomic coordinate", async () => {
 		const calls = stubUpstream({ took: 1, total: 0, max_score: null, hits: [] });
 		const queries = [
